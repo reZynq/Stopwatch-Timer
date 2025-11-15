@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Stopwatch + Timer + History + Subjects</title>
+  <style>
+    :root{
+      --bg:#0f1724; --card:#0b1220; --accent:#7c3aed; --muted:#94a3b8; --glass: rgba(255,255,255,0.03);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui}
+    body{display:flex;background:linear-gradient(180deg,#071029,#071b2a);color:#e6eef8;padding:24px}
+    .card{flex:1;max-width:900px;margin:auto;background:linear-gradient(180deg,var(--card),#071428);border-radius:14px;padding:28px;box-shadow:0 10px 30px rgba(2,6,23,0.6);backdrop-filter:blur(6px)}
+    .tabs{display:flex;gap:10px;margin-bottom:20px}
+    .tab{flex:1;text-align:center;padding:12px;border-radius:10px;cursor:pointer;background:var(--glass)}
+    .tab.active{background:linear-gradient(90deg,var(--accent),#5b21b6);font-weight:700}
+    .display{font-size:64px;font-weight:700;text-align:center;padding:18px;border-radius:10px;background:var(--glass);margin-bottom:20px}
+    button{background:transparent;border:1px solid rgba(255,255,255,0.06);color:inherit;padding:12px 18px;border-radius:10px;font-size:16px;cursor:pointer;transition:0.08s}
+    button:active{transform:translateY(1px)}
+    .btn-primary{background:linear-gradient(90deg,var(--accent),#5b21b6);border:none;color:white;box-shadow:0 6px 18px rgba(124,58,237,0.18)}
+    .controls{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-bottom:10px}
+    .laps, .history{margin-top:12px;max-height:400px;overflow:auto;padding:8px;border-radius:8px;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);font-family:monospace;}
+    input{width:100%;padding:10px;border-radius:8px;border:none;margin-bottom:12px;background:rgba(255,255,255,0.05);color:white;font-size:18px;text-align:center}
+    .barchart{display:flex;flex-direction:column;gap:12px;margin-top:12px}
+    .bar-container{display:flex;align-items:center;gap:12px}
+    .bar-label{width:100px;text-align:right}
+    .bar{height:24px;background:var(--accent);border-radius:12px;text-align:right;padding-right:6px;color:white;font-weight:700;}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="tabs">
+      <div class="tab active" data-mode="stopwatch">Stopwatch</div>
+      <div class="tab" data-mode="timer">Revision Timer</div>
+      <div class="tab" data-mode="history">History</div>
+      <div class="tab" data-mode="subjects">Subjects</div>
+    </div>
+
+    <div id="stopwatchMode">
+      <input id="swSubject" placeholder="Enter Subject (e.g. Maths)">
+      <div class="display" id="swDisplay">00:00.00</div>
+      <div class="controls">
+        <button id="swStartStop" class="btn-primary">Start</button>
+        <button id="swLap">Lap</button>
+        <button id="swReset">Reset</button>
+        <button id="swExport">Export</button>
+      </div>
+      <div class="laps" id="swLaps"></div>
+    </div>
+
+    <div id="timerMode" style="display:none">
+      <input id="timerInput" placeholder="Enter seconds (e.g. 900 for 15min)">
+      <div class="display" id="timerDisplay">00:00</div>
+      <div class="controls">
+        <button id="timerStart" class="btn-primary">Start</button>
+        <button id="timerReset">Reset</button>
+      </div>
+    </div>
+
+    <div id="historyMode" style="display:none">
+      <button id="clearHistoryBtn" class="btn-primary">Clear History</button>
+      <div class="history" id="historyList">No history yet.</div>
+    </div>
+
+    <div id="subjectsMode" style="display:none">
+      <div class="barchart" id="subjectChart">No data yet.</div>
+    </div>
+  </main>
+
+  <audio id="timerSound">
+    <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
+  </audio>
+
+  <script>
+    const tabs = document.querySelectorAll('.tab');
+    const stopwatchMode = document.getElementById('stopwatchMode');
+    const timerMode = document.getElementById('timerMode');
+    const historyMode = document.getElementById('historyMode');
+    const subjectsMode = document.getElementById('subjectsMode');
+
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const mode = tab.dataset.mode;
+        stopwatchMode.style.display = mode === 'stopwatch' ? 'block' : 'none';
+        timerMode.style.display = mode === 'timer' ? 'block' : 'none';
+        historyMode.style.display = mode === 'history' ? 'block' : 'none';
+        subjectsMode.style.display = mode === 'subjects' ? 'block' : 'none';
+        if(mode==='history'){ renderHistory(); }
+        if(mode==='subjects'){ renderSubjectsChart(); }
+      });
+    });
+
+    // Stopwatch logic
+    const swDisplay = document.getElementById('swDisplay');
+    const swStartStop = document.getElementById('swStartStop');
+    const swLap = document.getElementById('swLap');
+    const swReset = document.getElementById('swReset');
+    const swExport = document.getElementById('swExport');
+    const swLaps = document.getElementById('swLaps');
+    const swSubject = document.getElementById('swSubject');
+
+    let swRunning = false, swStart = 0, swElapsed = 0, swRaf = null;
+    let swLapTimes = [], swLapIndex = 0;
+    let swSessionStartTime = null;
+
+    function fmt(ms){ const c=Math.floor(ms/10)%100,s=Math.floor(ms/1000)%60,m=Math.floor(ms/60000);return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(c).padStart(2,'0')}`; }
+
+    function swUpdate(){ swDisplay.textContent = fmt((performance.now()-swStart)+swElapsed); swRaf = requestAnimationFrame(swUpdate); }
+    function swStartFn(){ if(swRunning)return; if(swSubject.value.trim()===''){ alert('Enter a subject first'); return; } swStart=performance.now(); swSessionStartTime = new Date(); swRunning=true; swStartStop.textContent='Stop'; swRaf=requestAnimationFrame(swUpdate); }
+    function swStopFn(){ if(!swRunning)return; cancelAnimationFrame(swRaf); swElapsed += performance.now()-swStart; swRunning=false; swStartStop.textContent='Start'; saveHistory(swSubject.value, swSessionStartTime, new Date(), swElapsed); }
+    function swResetFn(){ cancelAnimationFrame(swRaf); swRunning=false; swElapsed=0; swLapTimes=[]; swLapIndex=0; swDisplay.textContent='00:00.00'; swLaps.innerHTML=''; swStartStop.textContent='Start'; }
+    function swLapFn(){ const t = swRunning ? (performance.now()-swStart+swElapsed):swElapsed; swLapIndex++; swLapTimes.unshift({i:swLapIndex,t}); swLaps.innerHTML = swLapTimes.map(l=>`<div class="lap">#${l.i}<span>${fmt(l.t)}</span></div>`).join(''); }
+
+    swStartStop.onclick = ()=> swRunning ? swStopFn() : swStartFn();
+    swLap.onclick = swLapFn;
+    swReset.onclick = swResetFn;
+    swExport.onclick = ()=>{ if(!swLapTimes.length)return alert('No laps'); const rows=['Lap,Time']; swLapTimes.slice().reverse().forEach(l=>rows.push(`${l.i},${fmt(l.t)}`)); const blob=new Blob([rows.join("")],{type:'text/csv'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='laps.csv'; a.click(); };
+
+    // Timer logic
+    const timerInput = document.getElementById('timerInput');
+    const timerDisplay = document.getElementById('timerDisplay');
+    const timerStart = document.getElementById('timerStart');
+    const timerReset = document.getElementById('timerReset');
+    const beep = document.getElementById('timerSound');
+    let timerRemaining = 0, timerInterval = null;
+    function timerFmt(sec){ const m=Math.floor(sec/60), s=sec%60; return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; }
+    timerStart.onclick = ()=>{ if(timerInterval) return; timerRemaining = parseInt(timerInput.value); if(isNaN(timerRemaining)||timerRemaining<=0){ alert('Enter valid seconds'); return; } timerDisplay.textContent = timerFmt(timerRemaining); timerInterval = setInterval(()=>{ timerRemaining--; timerDisplay.textContent = timerFmt(timerRemaining); if(timerRemaining<=0){ clearInterval(timerInterval); timerInterval=null; timerDisplay.textContent = "00:00"; beep.play(); alert("Timer done!"); } },1000); };
+    timerReset.onclick = ()=>{ clearInterval(timerInterval); timerInterval=null; timerDisplay.textContent = "00:00"; timerInput.value=""; };
+
+    // History logic
+    const historyList = document.getElementById('historyList');
+    function saveHistory(subject, start, end, durationMs){ const history = JSON.parse(localStorage.getItem('history')||'[]'); history.push({subject,start:start.toISOString(),end:end.toISOString(),duration:durationMs}); localStorage.setItem('history', JSON.stringify(history)); }
+    function renderHistory(){ const history = JSON.parse(localStorage.getItem('history')||'[]'); if(history.length===0){ historyList.innerHTML='No history yet.'; return; } historyList.innerHTML = history.map(h=>{ const start = new Date(h.start); const end = new Date(h.end); const durMins = Math.round(h.duration/60000); return `${h.subject}: ${start.getHours()}:${String(start.getMinutes()).padStart(2,'0')} -> ${end.getHours()}:${String(end.getMinutes()).padStart(2,'0')} (${durMins}m) ${start.getDate()}/${start.getMonth()+1}/${start.getFullYear()}`; }).join('<br>'); }
+    document.getElementById('clearHistoryBtn').onclick = ()=>{ localStorage.removeItem('history'); renderHistory(); };
+
+    // Subjects Bar Chart
+    const subjectChart = document.getElementById('subjectChart');
+    function renderSubjectsChart(){
+      const history = JSON.parse(localStorage.getItem('history')||'[]');
+      if(history.length===0){ subjectChart.innerHTML='No data yet.'; return; }
+      // get current week Monday
+      const now = new Date();
+      const day = now.getDay();
+      const diffToMon = (day+6)%7; // Monday = 0
+      const mon = new Date(now); mon.setDate(now.getDate()-diffToMon); mon.setHours(0,0,0,0);
+      const weekData = {};
+      history.forEach(h=>{ const start = new Date(h.start); if(start>=mon){ if(!weekData[h.subject]) weekData[h.subject]=0; weekData[h.subject] += h.duration/3600000; } });
+      subjectChart.innerHTML = '';
+      for(const subject in weekData){
+        const barContainer = document.createElement('div'); barContainer.className='bar-container';
+        const label = document.createElement('div'); label.className='bar-label'; label.textContent = subject;
+        const bar = document.createElement('div'); bar.className='bar'; bar.style.width = (weekData[subject]*20)+'px'; bar.textContent = weekData[subject].toFixed(1)+'h';
+        barContainer.appendChild(label); barContainer.appendChild(bar); subjectChart.appendChild(barContainer);
+      }
+    }
+  </script>
+</body>
+</html>
